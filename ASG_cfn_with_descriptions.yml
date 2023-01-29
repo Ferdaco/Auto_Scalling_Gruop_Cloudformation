@@ -1,0 +1,170 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  This template creaqtes ASG with LT and Policy
+
+Parameters: 
+
+  InstanceType:
+    Description: Select your instance type # Bu cümle AWS Consoldan kopyalandı.
+    Type: String
+    Default: t2.micro # Hiç birşey seçmiyor olsam bile bana burada t2.micro'yu seçsin.
+    AllowedValues: # Aşağıda izin verilen InstanceType'ların ilk etapta ücretsiz olması önemli.
+      - t2.micro
+      - t2.nano
+      - t3.micro
+      - m1.small
+  MyKeyPair: # key yazınca ekrana gelen secenekten parameter-type-keypair-keyname seçildi.
+    Description: Select your keypair. # AWS Consoldaki Parameters>Keypair altında yazılan Select your keypair alınmıştır.
+    Type: AWS::EC2::KeyPair::KeyName
+
+  Subnets: # aşağıda MyALB kısmındaki subnet için oluşturuldu, subnet yazarken çıkan menüden en alttaki parameter-type-subnet-id-list seçildi.
+    Description: Select at least 2 subnets # Açıklamaya: en az 2 subnet seçsin diye yazıldı.
+    Type: List<AWS::EC2::Subnet::Id> # çıktıyı list olarak istiyorsak <> işaretlerini kullanıyoruz.
+
+  VPC: # Tüm resourse'lar bittikten sonra 1. resourse'un sonundaki VpcId'ye !ref oluşturması için oluşturuldu, vpc yazılırken parameter-type-vpc-id seçeneği seçildi, VpcId bizden liste istemediği için bu seçenek seçildi.
+    Description: Select your VPC
+    Type: AWS::EC2::VPC::Id
+
+Mappings:  
+  RegionImageMap: # Osvaldo hocamızın kendi yazmış olduğu ImageId kodlarıdır, ami kodlarını doğrulayabilirsin.
+    us-east-1:
+      AMI: ami-0b5eea76982371e91
+    us-east-2:
+      AMI: ami-0233c2d874b811deb
+    us-west-1:
+      AMI: ami-0ed05376b59b90e46
+    us-west-2:
+      AMI: ami-0dc8f589abe99f538
+    eu-west-1:
+      AMI: ami-058b1b7fe545997ae
+  
+Resources: # Her zaman security gruptan başlamak en kolayıdır, çünkü diğerlerinden bağımsızdır ama sıralamayı CFN kendisi yapıyor. # securty yazılırken, ec2-securitygroup seçildi.
+
+  MyCPUPolicy: # 7. Resource olarak hazırlandı, auto yazılırken, autoScaling-scalingpolicy seçildi
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref MyASG # Required # # Referans olarak 6. Resourse olarak oluşturduğumuz MyASG yazılmıştır.
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization # yukarıdaki AWS::AutoScaling::ScalingPolicy Docs'tan, SGAverageCPUUtilization altındaki seçeneklerden biri seçildi.
+        TargetValue: 60.0 # yukarıdaki AWS::AutoScaling::ScalingPolicy Docs'tan, .0 olarak yazılması seçildi, CPU %60.0'ın üzerine çıkarsa devreye girecek demektir.
+
+
+  MyASG: # 6. Resource olarak hazırlandı, auto yazılırken, autoScaling-autoscalinggroup seçildi
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      DesiredCapacity: 2 # Başlangıçta 2 instance ile ayağa kalksın.
+      HealthCheckGracePeriod: 90 # 90 saniye içinde karşıdan sinyal gelmezse sağlıksızdır, HealthCheck kısmında 300 saniyeydi bu.
+      HealthCheckType: ELB # ELB'nin HealthCheckini kullanması için yapıldı.
+      LaunchTemplate:
+        LaunchTemplateId: !Ref MyLaunchTemplate # Referans olarak 3. Resourse olarak oluşturduğumuz MyLaunchTemplate yazılmıştır.
+        Version: 1 # LaunchTemplateVersion 1 kullanıldı.
+      MaxSize: 3 # Required
+      MinSize: 2 # Required
+      TargetGroupARNs:
+        - !Ref MyTargetGrp # Referans olarak 2. Resourse olarak oluşturduğumuz MyTargetGrp yazılmıştır.
+      VPCZoneIdentifier: !Ref Subnets # Yukarıda yazan Subnetleri liste halinde verilmesini ister, bu yüzden Subnets referans alındı.
+
+  MyListener: # 4. Resource olarak hazırlandı, elb yazılırken, elasticloadbalancingv2-listener seçildi
+    Type: AWS::ElasticLoadBalancingV2::Listener # aşağıdaki öğeleri yan taraftaki AWS Docs User Guide kısmından dolduruyoruz.
+    Properties:
+      DefaultActions: # Required # Eğer altta satırbaşı varsa liste halinde yazılır.
+        - Type: forward # Gelen iletileri itmek anlamına gelir.
+          TargetGroupArn: !Ref MyTargetGrp # Aşağıdaki MyTargetGrp referans alındı. birşeyi referans almak için o bölümün resorse'una bakmalısın.
+      LoadBalancerArn: !Ref MyALB # Required # Aşağıdaki MyALB referans alındı.
+      Port: 80 # Listener bu porttan dinlenilecek. 
+      Protocol: HTTP # AWS Docs'tan burada hangi protkolleri seçeceğimiz yazılıdır.
+
+  MyALB: # 5. Resource olarak hazırlandı, loadba yazılırken, elasticloadbalancingv2-loadbalancer seçildi, diğer ayrıntıları silmemizin nedeni dual steak ismeyişimizdir, IPV4 istiyoruz. Consolun tamamını okumak veya hakim olmak gerekiyor.
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: osvaldo-cfn-elb # ismi kendin belirleyebilirsin.
+      SecurityGroups:
+        - !GetAtt MySecGrp.GroupId # AWS::EC2::SecurityGroup altında, Return values altında, Fn::GetAtt'den GroupId yazıldı, Logical ID olarak aşağıdan MySecGrp yazıldı.
+      Subnets: !Ref Subnets # Referans olarak yukarıdaki Subnets alındı.
+      Type: application # AWS .DOC Loadbalancer kısmından type kısımı seçilerek alındı.
+
+  MyLaunchTemplate: # 3. Resource olarak hazırlandı, target yazılırken, ec2-launchtemplate seçildi
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !FindInMap # Instancenin bağlı olduğu Region'un verdiği ImageId'ler kullanılır, Mappings kısmından bulacağız, alt alta olması için satırbasşı verilmiştir.
+          - RegionImageMap # Hangi değerden alacağımız.
+          - !Ref "AWS::Region" # Hangi Region olduğunu, en yakın Region'u AWS::Region'dan kendisi bulup yazması için !Ref komutu ile yazılır.
+          - AMI # İmage değerini yaz.
+        InstanceType: !Ref InstanceType # Refere olarak yukarıdaki Parameters altındaki InstanceType verecektir.
+        KeyName: !Ref MyKeyPair # Refere'yi  yine yukarıdaki Parameters altındaki MyKeyPairdan alacaktır.
+        SecurityGroupIds:
+          - !GetAtt MySecGrp.GroupId # SecurityGroup için aşağıda ilk yazılan MySecGrp seçildi, Id için doc.aws GetAtt'de yazılan değerlerden GroupId alındı, Yani; git aşağıdaki MySecGrp Attribute'lardan GroupId'sini GetAtt (al).
+        UserData: !Base64 | # EC2 ayağa kaldırırken en dipte Advenced details açınca en altta bulunan User data has ... yazan kısımdaki Base64 alınmıştır. aşağıdaki Shell Script'de User data kısmındaki boşluğa yapıştırdığımız Script'tir, EC2 açılırken tüm programlar hazır gelmesini sağlar.
+          #!/bin/bash
+
+          #update os
+          yum update -y
+          #install apache server
+          yum install -y httpd
+          # get private ip address of ec2 instance using instance metadata
+          TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"` \
+          && PRIVATE_IP=`curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4`
+          # get public ip address of ec2 instance using instance metadata
+          TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"` \
+          && PUBLIC_IP=`curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4` 
+          # get date and time of server
+          DATE_TIME=`date`
+          # set all permissions
+          chmod -R 777 /var/www/html
+          # create a custom index.html file
+          echo "<html>
+              <head>
+              <title> Application Load Balancer</title>
+              </head>
+              <body>
+                  <h1>Testing Application Load Balancer</h1>
+                  <h2>Congratulations! You have created an instance from Launch Template</h2>
+                  <h3>This web server is launched from the launch template by YOUR_NAME</h3>
+                  <p>This instance is created at <b>$DATE_TIME</b></p>
+                  <p>Private IP address of this instance is <b>$PRIVATE_IP</b></p>
+                  <p>Public IP address of this instance is <b>$PUBLIC_IP</b></p>
+              </body>
+              </html>" > /var/www/html/index.html
+              # start apache server
+              systemctl start httpd
+              systemctl enable httpd
+      LaunchTemplateName: osvaldocfnlt
+
+  MyTargetGrp: # 2. Resource olarak hazırlandı, target yazılırken, elasticloadbalancingv2 seçildi.
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup # Mouse ile üzerine gel ve Docs'a tıkla ve protokülü oku.
+    Properties:
+      HealthCheckIntervalSeconds: 10 # Bağlantının sağlık kontrolü aralığını 10 saniyede bir yap demektir.
+      HealthCheckPath: /
+      HealthCheckTimeoutSeconds: 5 # Bağlantının sağlık kontrolü zaman aşımı 5 saniyeden fazla ise bu bağlantı kötüdür.
+      HealthyThresholdCount: 3 # 3 tane ardı ardına sdağlıklı sağlık kontrolü yaparsa bu bağlantı sağlıklıdır, aralarında sağlıksız kontrol olursa bağlantı sağlıksızdır.
+      Port: 80 # port çıkışının 80 olması önemli, silme.
+      Protocol: HTTP # Burayı büyük harf olarak AWS Docs'den yazdık, AWS nasıl yazmanı istiyorsa o şekilde yazılmalı, hata alırsın.
+      UnhealthyThresholdCount: 2 # Bağlantı iki kez sağlıksız uyarısı alırsa, tekrar sormaz bağlantı sağlıksızdır.
+      VpcId: !Ref VPC # Referans için yukarıda VPC oluşturuldu.
+
+  MySecGrp: # 1. Resource olarak hazırlandı, Logical ID, bizim oluşturduğumuz mantıksal kimlik, lakabımızdır.
+    Type: AWS::EC2::SecurityGroup # AWS'den başla google kopyala, AWS Documention'dan YAML dosyasını 
+    Properties:
+      GroupDescription: Allow SSH and HTTP # Required
+      GroupName: osvaldocfnsecgrp # Oluşturduğun Logical ID'lerde (mantıksal kimlik) nokta kullanma, çünkü noktadan sonraki birime git demektir ve hata verir.
+      SecurityGroupIngress: # 1. Resource olarak hazırlandı, securty yazarken çıkan security-group-ingress-cdir seç
+        - IpProtocol: tpc # Burada IP portunu seçmeni istiyor
+          FromPort: 80 # bu ve alt satırda port aralığı verilmiştir, kendinde bir port aralığı seçebilirsin, Mesela 20 ile 90 olabilir.
+          ToPort: 80
+          CidrIp: 0.0.0.0/0 # Source IP'ir
+        - IpProtocol: tpc # Yukarıdan kopyalandı ve 22 port yazıldı
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref VPC # Referans için yukarıda VPC oluşturuldu.
+
+Outputs: # ASG'nin son düzenlenen öğesidir, çıktı olarak loadbalancerDNS url'de belirtebilirsin.
+  showDNS: # out yaılırken ilk çıkan output seçeneği seçilmiştir.
+    Description: DNS of ALB # Açıklama olarak yazıldı.
+    Value: !Join # !Join fonksiyonu ile aşağıdaki seçenekler çıkarıldı. Bu fonkiyon altında çıkan tüm maddeleri, ARN'leri birleştirmek için kullanılır.
+    - '' # çift tırnak boşluk arada hiçbirşey olmayacak şekilde birleştir demektir.
+    - -  'http://' # bağlantı adresinin başına bunu yaz.
+      -  !GetAtt MyALB.DNSName # 5. Resourse olan MyALB referans olarak alındı. 
